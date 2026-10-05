@@ -1,0 +1,15 @@
+# Core
+torch>=2.0
+torchvision>=0.15
+numpy>=1.23
+tifffile>=2023.1.1
+scikit-learn>=1.2
+matplotlib>=3.6
+
+# Notebook (optional)
+jupyter>=1.0
+ipykernel>=6.0
+
+# Optional: only needed if you want to read/inspect GeoTIFF georeferencing metadata.
+# The pipeline itself reads tiles with tifffile and does not import rasterio.
+# rasterio>=1.3
