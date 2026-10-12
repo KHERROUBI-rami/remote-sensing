@@ -30,14 +30,14 @@ The original PyTorch training log reported 97.37 % test accuracy for the FP32 mo
 
 **Classes** (output index order): `AnnualCrop`, `Forest`, `HerbaceousVegetation`, `Highway`, `Industrial`, `Pasture`, `PermanentCrop`, `Residential`, `River`, `SeaLake`.
 
-**Bands.** EuroSAT `.tif` tiles have 13 bands, stored as B01 ... B12 followed by **B8A last**. The model uses these zero-based indices:
+**Bands.** EuroSAT `.tif` tiles have 13 bands stored as B01 ... B12 followed by **B8A last**. This differs from the usual Sentinel-2 order (where B8A is index 8), so B11 and B12 are at indices 10 and 11, not 11 and 12. The model uses these zero-based indices:
 
 | Channel | 1 | 2 | 3 | 4 | 5 | 6 |
 |---|---|---|---|---|---|---|
 | Band | B2 (Blue) | B3 (Green) | B4 (Red) | B8 (NIR) | B11 (SWIR-1) | B12 (SWIR-2) |
 | Index in the `.tif` | 1 | 2 | 3 | 7 | 10 | 11 |
 
-Using any other band selection or scaling will give wrong predictions without raising an error.
+Using any other band selection (for example `[1, 2, 3, 7, 11, 12]`, which would pick B12 and B8A) or scaling gives wrong predictions without raising an error.
 
 ## Quick start
 
