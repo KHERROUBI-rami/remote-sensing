@@ -211,4 +211,4 @@ Notes on quantising MobileNetV3:
 
 ## License
 
-Released under the MIT License (see `LICENSE`). EuroSAT and the torchvision ImageNet weights have their own terms.
+Add a `LICENSE` file of your choice (MIT or Apache-2.0 are common). EuroSAT and the torchvision ImageNet weights have their own terms.
