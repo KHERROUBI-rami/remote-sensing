@@ -19,7 +19,7 @@ Downlinking raw imagery from small satellites is bandwidth-limited. Classifying 
 
 We use the **13-band "all bands" GeoTIFF release** and keep six channels (zero-based indices `[1, 2, 3, 7, 10, 11]`, defined in `dataset.py` as `SELECTED_BANDS`):
 
-| Channel | Index | Intended band |
+| Channel | Index | Band |
 |---|---|---|
 | 1 | 1 | B2 (Blue) |
 | 2 | 2 | B3 (Green) |
@@ -28,7 +28,23 @@ We use the **13-band "all bands" GeoTIFF release** and keep six channels (zero-b
 | 5 | 10 | B11 (SWIR-1) |
 | 6 | 11 | B12 (SWIR-2) |
 
-> **Band selection — please verify before publishing claims.** In the standard Sentinel-2 13-band ordering (B1, B2, B3, B4, B5, B6, B7, B8, B8A, B9, B10, B11, B12), index 10 is **B10** and index 11 is **B11**, while **B11/B12 are indices 11/12**. The released `best_model.pth` was trained with `[1, 2, 3, 7, 10, 11]`, so unless your copy of the tiles uses a different band order, the model's last two channels are B10 and B11, not B11 and B12. Check one tile (for example, B10 cirrus values are near-constant and very low) and then either correct the table above or retrain with `[1, 2, 3, 7, 11, 12]`. Inference with the provided weights must use the same indices the model was trained with.
+**Band selection (verified).** The EuroSAT `.tif` tiles do **not** follow the usual Sentinel-2 order: the bands are stored as B01, B02, ..., B12 and then **B8A last** (index 12). That is why B11 and B12 sit at indices 10 and 11, and why `SELECTED_BANDS = [1, 2, 3, 7, 10, 11]` really is B2, B3, B4, B8, B11, B12. The reflectance profile of one Forest tile confirms it: index 9 is almost zero (cirrus, B10), index 10 is mid-range (SWIR-1), index 11 is low (SWIR-2) and index 12 is the brightest NIR-like band (B8A).
+
+| Index | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Band | B01 | B02 | B03 | B04 | B05 | B06 | B07 | B08 | B09 | B10 | B11 | B12 | B8A |
+| Mean DN (one Forest tile) | 1150 | 831 | 652 | 410 | 659 | 1998 | 2707 | 2612 | 579 | 8 | 1305 | 496 | 3115 |
+
+Check it on your own copy of the data:
+
+```python
+import glob, tifffile
+f = sorted(glob.glob("path/to/tif/Forest/*.tif"))[0]
+a = tifffile.imread(f)
+print([round(float(a[:, :, i].mean())) for i in range(a.shape[2])])
+```
+
+Do not use `[1, 2, 3, 7, 11, 12]`: with these tiles that would select B12 and B8A and no longer match the trained weights.
 
 **Preprocessing:** reflectance is scaled by `1/10000`. **Training augmentation:** random horizontal/vertical flips, random 90° rotations, Gaussian noise (σ = 0.01) and a per-band gain in [0.9, 1.1]. Colour jitter is deliberately not used, since it would corrupt the spectral meaning of the channels.
 

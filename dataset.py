@@ -25,8 +25,10 @@ from torch.utils.data import DataLoader, Dataset
 # Constants
 # --------------------------------------------------------------------------- #
 # Zero-based channel indices into the 13-band EuroSAT GeoTIFFs.
-# IMPORTANT: this is the exact selection the released ``best_model.pth`` was
-# trained with.  Changing it requires retraining.  See README ("Band selection").
+# In these tiles the bands are stored as B01..B12 followed by B8A (B8A is LAST,
+# not at index 8), so:  1=B2  2=B3  3=B4  7=B8  10=B11  11=B12.
+# This is the exact selection the released ``best_model.pth`` was trained with;
+# changing it requires retraining.  See README ("Band selection").
 SELECTED_BANDS: List[int] = [1, 2, 3, 7, 10, 11]
 
 CLASS_NAMES: List[str] = [
