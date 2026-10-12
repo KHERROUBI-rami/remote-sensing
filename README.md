@@ -32,7 +32,7 @@ We use the **13-band "all bands" GeoTIFF release** and keep six channels (zero-b
 
 **Preprocessing:** reflectance is scaled by `1/10000`. **Training augmentation:** random horizontal/vertical flips, random 90° rotations, Gaussian noise (σ = 0.01) and a per-band gain in [0.9, 1.1]. Colour jitter is deliberately not used, since it would corrupt the spectral meaning of the channels.
 
-**Fixed split:** `split.json` stores train / validation / test indices (80 / 10 / 10 %, seed 42; 21,600 / 2,700 / 2,700 images). The file is created on first run and then reused, so every experiment is scored on identical test images. The indices refer to the **sorted** file listing (see `dataset.list_samples`); regenerate the split by deleting `split.json` whenever the dataset folder changes.
+**Fixed split:** `data/eurosat_split_indices.json` (pass it with `--split-file`; any path works, the default is `split.json`) stores train / validation / test indices (80 / 10 / 10 %, seed 42; 21,600 / 2,700 / 2,700 images). The file is created on first run and then reused, so every experiment is scored on identical test images. The indices refer to the **sorted** file listing (see `dataset.list_samples`); regenerate the split by deleting `split.json` whenever the dataset folder changes.
 
 ## Model architecture and transfer learning
 
@@ -48,7 +48,7 @@ We use the **13-band "all bands" GeoTIFF release** and keep six channels (zero-b
 * **First-layer surgery:** the pretrained 3-channel filters initialise channels 1-3; the extra channels start from the *mean* pretrained filter. This preserves activation scale and lets the network reuse its ImageNet features from epoch 1.
 * **Full fine-tuning** of all layers (not just the head), Adam, `lr=1e-4`, `weight_decay=1e-3`.
 * **Regularisation:** label smoothing 0.1, heavy dropout in the head, gradient clipping (1.0), `ReduceLROnPlateau` and early stopping (patience 7) on validation loss; the checkpoint with the best validation accuracy is kept.
-* Everything runs on CPU or GPU, and the all-convolutional backbone accepts other tile sizes through global pooling.
+* Everything runs on CPU or GPU; global pooling lets the backbone accept other tile sizes, although the model was trained on 64 x 64 tiles only.
 
 ## Results
 
@@ -66,7 +66,7 @@ Losses are higher than usual because of label smoothing. Training accuracy (~94 
 ### 1. Install
 
 ```bash
-git clone <your-repo-url> && cd eurosat-6band-mobilenetv3
+git clone https://github.com/KHERROUBI-rami/remote-sensing.git && cd remote-sensing
 python -m venv .venv && source .venv/bin/activate   # optional
 pip install -r requirements.txt
 ```
@@ -85,7 +85,7 @@ unzip -q EuroSATallBands.zip -d data/EuroSATallBands
 ```bash
 python train.py \
   --data-dir data/EuroSATallBands/ds/images/remote_sensing/otherDatasets/sentinel_2/tif \
-  --split-file split.json \
+  --split-file data/eurosat_split_indices.json \
   --output-dir outputs \
   --epochs 10 --batch-size 32 --lr 1e-4
 ```
@@ -115,7 +115,53 @@ top3, _ = predict(model, "path/to/tile.tif", device, top_k=3)
 print(top3)   # [('Forest', 0.98), ...]
 ```
 
-### 5. Notebook
+### 5. Deploy: ONNX export and INT8 quantisation
+
+The PyTorch checkpoint is converted to ONNX and then quantised with ONNX Runtime, so the model can run on CPU-only edge hardware without PyTorch.
+
+```bash
+D=data/EuroSATallBands/ds/images/remote_sensing/otherDatasets/sentinel_2/tif
+S=data/eurosat_split_indices.json
+
+# 1) Export to ONNX (batch size dynamic; checks logits against PyTorch)
+python export_onnx.py --weights outputs/best_model.pth --output outputs/model_fp32.onnx
+
+# 2) Quantise: static INT8 (calibrated on 500 class-balanced *training* tiles); add dynamic / fp16 if wanted
+python quantize.py --onnx outputs/model_fp32.onnx --data-dir $D --split-file $S \
+                   --mode static dynamic fp16 --output-dir outputs
+
+# 3) Compare accuracy, size and latency on the held-out TEST split (first model = reference)
+python benchmark_onnx.py --models outputs/model_fp32.onnx outputs/model_int8_static.onnx \
+                         --data-dir $D --split-file $S --threads 1 --save outputs/benchmark.md
+
+# 4) Inference with any ONNX file
+python infer.py --weights outputs/model_int8_static.onnx path/to/tile.tif
+```
+
+| Variant | What it does | File size* |
+|---|---|---|
+| `model_fp32.onnx` | Straight export of `best_model.pth` | 12.4 MB |
+| `model_int8_static.onnx` | INT8 weights **and** activations (QDQ, per-channel weights, calibrated) | ~3.6 MB (about 3.5x smaller) |
+| `model_int8_dynamic.onnx` | INT8 weights, activations quantised at run time | ~3.3 MB |
+| `model_fp16.onnx` | Float16 weights, float32 inputs/outputs | ~6.2 MB |
+
+\* Sizes depend only on the architecture, so they are reproducible; accuracy and latency depend on your data and hardware, so **measure them with `benchmark_onnx.py`** and record them in the table below.
+
+**Quantised results (fill in after running step 3):**
+
+| Model | Test accuracy | Test F1 (weighted) | Latency, 1 CPU thread |
+|---|---|---|---|
+| FP32 ONNX | _TBD_ | _TBD_ | _TBD_ |
+| INT8 static | _TBD_ | _TBD_ | _TBD_ |
+
+Notes on quantising MobileNetV3:
+
+* Post-training INT8 of MobileNetV3 (Hardswish and squeeze-excite blocks) can lose far more accuracy than for plain ResNets, and the loss depends on the calibration settings. If the INT8 accuracy drop is large, try `--calib-method entropy` or `minmax`, `--keep-head-fp32`, `--activation-type int8`, or more calibration tiles (`--calib-per-class`). If none of that is enough, quantisation-aware training is the next step.
+* Calibration uses **training** tiles only, with no augmentation. Never calibrate or evaluate on the test split.
+* FP16 halves the file size but is typically **not faster on CPU**; it is mainly useful for GPU/NPU targets.
+* Normalisation (`/ 10000`) is done outside the graph. Any runtime that feeds the ONNX model must apply the same preprocessing and the same band selection as `dataset.read_6band_tile`.
+
+### 6. Notebook
 
 `eurosat_6band_mobilenetv3.ipynb` walks through the whole pipeline (setup, dataset, model, training, evaluation, inference) and imports the modules above. Set `DATA_DIR` in the configuration cell, or export `EUROSAT_DIR`.
 
@@ -125,9 +171,14 @@ print(top3)   # [('Forest', 0.98), ...]
 ├── dataset.py                       # EuroSat6BandDataset, fixed-split handling, augmentation
 ├── model.py                         # MobileNetV3Classifier (6-channel), checkpoint loader
 ├── train.py                         # training / validation / early stopping / evaluation CLI
-├── infer.py                         # single-image and folder inference CLI
-├── eurosat_6band_mobilenetv3.ipynb  # end-to-end walkthrough
-├── split.json                       # fixed train/val/test indices (commit this)
+├── infer.py                         # single-image / folder inference (.pth or .onnx)
+├── export_onnx.py                   # best_model.pth -> ONNX (+ parity check vs PyTorch)
+├── quantize.py                      # static / dynamic INT8 and FP16 conversion of the ONNX model
+├── benchmark_onnx.py                # accuracy, size and latency of ONNX variants on the test split
+├── eurosat_6band_mobilenetv3.ipynb  # end-to-end walkthrough (training and evaluation)
+├── incubator_3.py                   # earlier smoke test for a TorchScript INT8 model
+├── data/eurosat_split_indices.json  # fixed train/val/test indices (commit this)
+├── docs/model_technical_report_en.pdf
 ├── requirements.txt
 └── README.md
 ```
@@ -136,7 +187,7 @@ print(top3)   # [('Forest', 0.98), ...]
 
 * EuroSAT patches are clean, centre-cropped scenes of a single class. Expect lower accuracy on real satellite passes (clouds, mixed scenes, sensor differences).
 * Reported numbers come from a single run and a single split, with no confidence intervals.
-* Latency, energy and memory on actual CubeSat hardware have not been measured here.
+* Latency, energy and memory on actual CubeSat hardware have not been measured here. Quantised-model accuracy is only reported once you run `benchmark_onnx.py` (see section 5).
 
 ## Citation
 

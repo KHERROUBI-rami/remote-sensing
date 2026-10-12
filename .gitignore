@@ -1,2 +1,9 @@
 weights/
 *.pth
+data/EuroSATallBands/
+data/*.zip
+EuroSATallBands.zip
+outputs/
+.venv/
+__pycache__/
+.ipynb_checkpoints/

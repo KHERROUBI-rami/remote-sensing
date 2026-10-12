@@ -7,6 +7,11 @@ Examples
 
 Inputs may be original 13-band EuroSAT tiles (the 6 training bands are
 selected automatically) or tiles already reduced to 6 bands.
+
+``--weights`` accepts either a PyTorch ``.pth`` state_dict or an exported ``.onnx``
+model (FP32, INT8 or FP16), e.g.:
+
+    python infer.py --weights outputs/model_int8_static.onnx path/to/tile.tif
 """
 
 from __future__ import annotations
@@ -46,6 +51,17 @@ def predict(model, tile_path: str, device, top_k: int = 3) -> Tuple[List[Tuple[s
     return [(CLASS_NAMES[i], float(v)) for v, i in zip(values, indices)], x[0].cpu()
 
 
+def predict_onnx(session, tile_path: str, top_k: int = 3) -> Tuple[List[Tuple[str, float]], torch.Tensor]:
+    """Same as :func:`predict` but runs an ONNX Runtime session (CPU)."""
+    tensor = read_6band_tile(tile_path, SELECTED_BANDS)
+    in_meta = session.get_inputs()[0]
+    dtype = np.float16 if "float16" in in_meta.type else np.float32
+    logits = session.run(None, {in_meta.name: tensor.unsqueeze(0).numpy().astype(dtype)})[0][0]
+    probs = F.softmax(torch.from_numpy(logits.astype(np.float32)), dim=0)
+    values, indices = probs.topk(min(top_k, len(CLASS_NAMES)))
+    return [(CLASS_NAMES[i], float(v)) for v, i in zip(values, indices)], tensor
+
+
 def save_rgb_preview(tensor: torch.Tensor, title: str, path: str) -> None:
     """Save a true-colour preview. Channels are ordered [B2, B3, B4, ...] so RGB = [2, 1, 0]."""
     import matplotlib
@@ -66,17 +82,25 @@ def save_rgb_preview(tensor: torch.Tensor, title: str, path: str) -> None:
 def main(argv=None) -> None:
     p = argparse.ArgumentParser(description="Classify EuroSAT 6-band tiles.")
     p.add_argument("inputs", nargs="+", help=".tif file(s) or folder(s) of .tif files")
-    p.add_argument("--weights", default="best_model.pth", help="Path to the trained state_dict.")
+    p.add_argument("--weights", default="best_model.pth",
+                   help="Trained state_dict (.pth) or exported ONNX model (.onnx).")
     p.add_argument("--top-k", type=int, default=3)
     p.add_argument("--save-rgb", default=None,
                    help="Save an RGB preview of the (last) tile to this PNG path.")
     args = p.parse_args(argv)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = load_checkpoint(args.weights, device, num_bands=len(SELECTED_BANDS), num_classes=len(CLASS_NAMES))
+    use_onnx = args.weights.lower().endswith(".onnx")
+    if use_onnx:
+        import onnxruntime as ort
+        session = ort.InferenceSession(args.weights, providers=["CPUExecutionProvider"])
+    else:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model = load_checkpoint(args.weights, device, num_bands=len(SELECTED_BANDS),
+                                num_classes=len(CLASS_NAMES))
 
     for path in collect_paths(args.inputs):
-        top, tensor = predict(model, path, device, args.top_k)
+        top, tensor = (predict_onnx(session, path, args.top_k) if use_onnx
+                       else predict(model, path, device, args.top_k))
         best_name, best_prob = top[0]
         print(f"{os.path.basename(path)} -> {best_name} ({best_prob * 100:.2f}%)")
         for name, prob in top[1:]:

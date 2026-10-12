@@ -6,6 +6,11 @@ tifffile>=2023.1.1
 scikit-learn>=1.2
 matplotlib>=3.6
 
+# Deployment: ONNX export, INT8 quantisation, benchmarking
+onnx>=1.14
+onnxruntime>=1.16
+onnxconverter-common>=1.14   # only for the optional FP16 conversion
+
 # Notebook (optional)
 jupyter>=1.0
 ipykernel>=6.0
